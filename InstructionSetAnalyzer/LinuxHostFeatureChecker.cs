@@ -7,8 +7,18 @@ public sealed class LinuxHostFeatureChecker : IHostFeatureChecker
 {
     private const int ArchGetXcompSupp = 0x1021;
     private const int ArchGetXcompPerm = 0x1022;
-    private const int XfeatureTileConfig = 17;
-    private const int XfeatureTileData = 18;
+
+    private readonly ICpuid? _cpuid;
+
+    public LinuxHostFeatureChecker()
+        : this(HardwareCpuid.TryCreate())
+    {
+    }
+
+    internal LinuxHostFeatureChecker(ICpuid? cpuid)
+    {
+        _cpuid = cpuid;
+    }
 
     public HostCompatibilityReport Check(IEnumerable<CpuidFeature> requiredFeatures)
     {
@@ -21,7 +31,7 @@ public sealed class LinuxHostFeatureChecker : IHostFeatureChecker
         var results = requiredFeatures
             .Distinct()
             .OrderBy(feature => feature.ToString(), StringComparer.Ordinal)
-            .Select(feature => CheckFeature(feature, flags, xstate, xstatePermissions))
+            .Select(feature => CheckFeature(feature, flags, xstate, xstatePermissions, _cpuid))
             .ToArray();
 
         return new HostCompatibilityReport(
@@ -34,84 +44,9 @@ public sealed class LinuxHostFeatureChecker : IHostFeatureChecker
         CpuidFeature feature,
         IReadOnlySet<string> flags,
         ulong? supportedXstate,
-        ulong? xstatePermissions)
-    {
-        if (LinuxCpuFlagTables.Architectural.Contains(feature))
-        {
-            return new HostFeatureResult(feature, HostFeatureStatus.Supported, "x86 architectural feature");
-        }
-
-        if (IsAmxFeature(feature) && !flags.Contains("amx_tile"))
-        {
-            return new HostFeatureResult(
-                feature,
-                HostFeatureStatus.Unsupported,
-                "AMX_TILE is required by every AMX instruction");
-        }
-
-        var aliases = LinuxCpuFlagTables.GetCandidateFlags(feature);
-        var hasRequiredFlags = feature == CpuidFeature.PKU
-            ? flags.Contains("pku") && flags.Contains("ospke")
-            : aliases.Any(flags.Contains);
-        if (!hasRequiredFlags)
-        {
-            var mappingIsKnown = LinuxCpuFlagTables.HasKnownFlagMapping(feature);
-            return new HostFeatureResult(
-                feature,
-                mappingIsKnown ? HostFeatureStatus.Unsupported : HostFeatureStatus.Indeterminate,
-                mappingIsKnown
-                    ? feature == CpuidFeature.PKU
-                        ? "Linux CPU flags pku and ospke are both required"
-                        : $"missing Linux CPU flag ({string.Join(" or ", aliases)})"
-                    : "no reliable Linux userspace capability mapping is available");
-        }
-
-        if (IsAmxFeature(feature))
-        {
-            const ulong requiredAmxState = (1UL << XfeatureTileConfig) | (1UL << XfeatureTileData);
-            if (supportedXstate is null)
-            {
-                return new HostFeatureResult(
-                    feature,
-                    HostFeatureStatus.Indeterminate,
-                    "CPU flag is present, but Linux AMX XSTATE support could not be queried");
-            }
-
-            if ((supportedXstate.Value & requiredAmxState) != requiredAmxState)
-            {
-                return new HostFeatureResult(
-                    feature,
-                    HostFeatureStatus.Unsupported,
-                    "Linux does not support the required AMX tile XSTATE components");
-            }
-
-            if (xstatePermissions is null)
-            {
-                return new HostFeatureResult(
-                    feature,
-                    HostFeatureStatus.Indeterminate,
-                    "Linux AMX process permission could not be queried");
-            }
-
-            if ((xstatePermissions.Value & (1UL << XfeatureTileData)) == 0)
-            {
-                return new HostFeatureResult(
-                    feature,
-                    HostFeatureStatus.PermissionRequired,
-                    "host supports AMX, but this process has not requested tile-data permission");
-            }
-
-            return new HostFeatureResult(
-                feature,
-                HostFeatureStatus.Supported,
-                "Linux AMX tile-data permission is active for this process");
-        }
-
-        return new HostFeatureResult(feature, HostFeatureStatus.Supported, "Linux CPU flag is enabled");
-    }
-
-    private static bool IsAmxFeature(CpuidFeature feature) =>
-        feature.ToString().StartsWith("AMX_", StringComparison.Ordinal);
+        ulong? xstatePermissions,
+        ICpuid? cpuid = null) =>
+        HostFeatureEvaluator.Evaluate(feature, new HostState(flags, supportedXstate, xstatePermissions, cpuid));
 
     private static HashSet<string> ReadCommonCpuFlags()
     {

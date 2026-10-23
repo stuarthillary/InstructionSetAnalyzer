@@ -137,6 +137,34 @@ internal static class LinuxCpuFlagTables
         CpuidFeature.PAUSE
     ];
 
+    internal static readonly HashSet<CpuidFeature> AmxFeatures =
+    [
+        CpuidFeature.AMX_BF16,
+        CpuidFeature.AMX_COMPLEX,
+        CpuidFeature.AMX_FP16,
+        CpuidFeature.AMX_INT8,
+        CpuidFeature.AMX_TILE
+    ];
+
+    /// <summary>
+    /// Features the kernel does not print in /proc/cpuinfo but that CPUID reports reliably, with what the OS
+    /// must additionally have enabled. Bit positions are from the Intel SDM, cross-checked against gcc's
+    /// cpuid.h and the kernel's cpufeatures.h. UINTR, RDPMC and TDX are deliberately absent: CPUID only shows
+    /// hardware capability and the OS must also enable them.
+    /// </summary>
+    internal static readonly IReadOnlyDictionary<CpuidFeature, CpuidOnlyRule> CpuidOnlyFeatures =
+        new Dictionary<CpuidFeature, CpuidOnlyRule>
+        {
+            [CpuidFeature.AMX_COMPLEX] = new(new CpuidBit(7, 1, CpuidRegister.Eax, 8), OsRequirement.AmxState),
+            [CpuidFeature.AMX_FP16] = new(new CpuidBit(7, 1, CpuidRegister.Eax, 21), OsRequirement.AmxState),
+            [CpuidFeature.AVX_IFMA] = new(new CpuidBit(7, 1, CpuidRegister.Eax, 23), OsRequirement.AvxState),
+            [CpuidFeature.AVX_NE_CONVERT] = new(new CpuidBit(7, 1, CpuidRegister.Edx, 5), OsRequirement.AvxState),
+            [CpuidFeature.AVX_VNNI_INT16] = new(new CpuidBit(7, 1, CpuidRegister.Edx, 10), OsRequirement.AvxState),
+            [CpuidFeature.AVX_VNNI_INT8] = new(new CpuidBit(7, 1, CpuidRegister.Edx, 4), OsRequirement.AvxState),
+            [CpuidFeature.PREFETCHWT1] = new(new CpuidBit(7, 0, CpuidRegister.Ecx, 0), OsRequirement.None),
+            [CpuidFeature.SHA512] = new(new CpuidBit(7, 1, CpuidRegister.Eax, 0), OsRequirement.AvxState)
+        };
+
     /// <summary>The /proc/cpuinfo flag names that indicate the feature; any one of them is enough.</summary>
     internal static IReadOnlyList<string> GetCandidateFlags(CpuidFeature feature) =>
         FlagAliases.TryGetValue(feature, out var aliases)
@@ -146,3 +174,17 @@ internal static class LinuxCpuFlagTables
     internal static bool HasKnownFlagMapping(CpuidFeature feature) =>
         FlagAliases.ContainsKey(feature) || KernelReported.Contains(feature);
 }
+
+/// <summary>What the operating system must have enabled for a CPUID-reported feature to be usable.</summary>
+internal enum OsRequirement
+{
+    None,
+
+    /// <summary>YMM register state: Linux reports it as the "avx" flag.</summary>
+    AvxState,
+
+    /// <summary>AMX tile state: checked through the AMX_TILE flag and Linux XSTATE support.</summary>
+    AmxState
+}
+
+internal readonly record struct CpuidOnlyRule(CpuidBit Bit, OsRequirement OsRequirement);

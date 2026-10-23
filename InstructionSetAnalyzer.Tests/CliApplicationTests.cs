@@ -73,14 +73,51 @@ public sealed class CliApplicationTests : IDisposable
     public void Analyze_skips_unsupported_architectures_in_a_directory_without_failing()
     {
         _temp.Write("good.so", TestElf.Build(TestElf.Avx));
-        var arm = _temp.Write("arm.so", TestElf.Build(TestElf.Sse, TestElf.MachineAArch64));
+        _temp.Write("arm.so", TestElf.Build(TestElf.Sse, TestElf.MachineAArch64));
 
         var exitCode = Run("analyze", _temp.Path);
 
         Assert.Equal(0, exitCode);
         Assert.Contains("Analyzed ELF binaries: 1", _output.ToString());
         Assert.Contains("Skipped (unsupported architecture): 1", _output.ToString());
+        Assert.Equal(string.Empty, _error.ToString());
+    }
+
+    [Fact]
+    public void Analyze_directory_output_is_quiet_by_default()
+    {
+        var good = _temp.Write("good.so", TestElf.Build(TestElf.Avx));
+
+        Run("analyze", _temp.Path);
+
+        Assert.DoesNotContain("Analyzing", _output.ToString());
+        Assert.DoesNotContain(good, _output.ToString());
+    }
+
+    [Theory]
+    [InlineData("--verbose")]
+    [InlineData("-v")]
+    public void Analyze_verbose_lists_each_file_and_each_skip(string flag)
+    {
+        var good = _temp.Write("good.so", TestElf.Build(TestElf.Avx));
+        var arm = _temp.Write("arm.so", TestElf.Build(TestElf.Sse, TestElf.MachineAArch64));
+
+        var exitCode = Run("analyze", _temp.Path, flag);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains($"Analyzing {good}", _output.ToString());
         Assert.Contains($"Warning: skipped {arm}", _error.ToString());
+    }
+
+    [Fact]
+    public void Analyze_reports_failed_files_even_when_not_verbose()
+    {
+        _temp.Write("good.so", TestElf.Build(TestElf.Avx));
+        var corrupt = _temp.Write("bad.so", TestElf.WithBadSectionNameIndex(TestElf.Build(TestElf.Avx)));
+
+        Run("analyze", _temp.Path);
+
+        Assert.Contains($"Warning: could not analyze {corrupt}", _error.ToString());
     }
 
     [Fact]

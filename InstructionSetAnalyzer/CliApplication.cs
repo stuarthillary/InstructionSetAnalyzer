@@ -37,14 +37,20 @@ internal sealed class CliApplication
             Description = "Also report features whose instructions only run in ring 0 (such as VMX or MSR). " +
                           "By default these are hidden because user-space binaries only contain them as misdecoded data."
         };
+        var verboseOption = new Option<bool>("--verbose", "-v")
+        {
+            Description = "List every file as it is analyzed and every file skipped for its architecture."
+        };
         var analyzeCommand = new Command("analyze", "Find CPU features used by an ELF file or directory.");
         analyzeCommand.Arguments.Add(pathArgument);
         analyzeCommand.Options.Add(checkHostOption);
         analyzeCommand.Options.Add(includePrivilegedOption);
+        analyzeCommand.Options.Add(verboseOption);
         analyzeCommand.SetAction(parseResult => Analyze(
             parseResult.GetValue(pathArgument)!,
             parseResult.GetValue(checkHostOption),
-            parseResult.GetValue(includePrivilegedOption)));
+            parseResult.GetValue(includePrivilegedOption),
+            parseResult.GetValue(verboseOption)));
 
         var featuresArgument = new Argument<string[]>("features")
         {
@@ -60,7 +66,7 @@ internal sealed class CliApplication
         return rootCommand;
     }
 
-    internal int Analyze(string inputPath, bool checkHost, bool includePrivileged = false)
+    internal int Analyze(string inputPath, bool checkHost, bool includePrivileged = false, bool verbose = false)
     {
         var path = Path.GetFullPath(inputPath);
         var analyzer = new ElfInstructionSetAnalyzer(includePrivileged);
@@ -80,7 +86,7 @@ internal sealed class CliApplication
             }
             else if (Directory.Exists(path))
             {
-                var result = AnalyzeDirectory(path, analyzer);
+                var result = AnalyzeDirectory(path, analyzer, verbose);
                 _output.WriteLine($"Directory {path}");
                 _output.WriteLine($"Analyzed ELF binaries: {result.AnalyzedCount}");
                 if (result.SkippedCount > 0)
@@ -122,7 +128,7 @@ internal sealed class CliApplication
         }
     }
 
-    private DirectoryAnalysisResult AnalyzeDirectory(string path, ElfInstructionSetAnalyzer analyzer)
+    private DirectoryAnalysisResult AnalyzeDirectory(string path, ElfInstructionSetAnalyzer analyzer, bool verbose)
     {
         var features = new HashSet<CpuidFeature>();
         var analyzedCount = 0;
@@ -144,7 +150,11 @@ internal sealed class CliApplication
 
             try
             {
-                _output.WriteLine($"Analyzing {file}");
+                if (verbose)
+                {
+                    _output.WriteLine($"Analyzing {file}");
+                }
+
                 var result = analyzer.Analyze(file);
                 features.UnionWith(result.Features);
                 analyzedCount++;
@@ -153,7 +163,10 @@ internal sealed class CliApplication
             {
                 // Unsupported architectures are expected in mixed directories and do not make the scan fail.
                 skippedCount++;
-                _error.WriteLine($"Warning: skipped {file}: {exception.Message}");
+                if (verbose)
+                {
+                    _error.WriteLine($"Warning: skipped {file}: {exception.Message}");
+                }
             }
             catch (Exception exception) when (
                 exception is IOException or UnauthorizedAccessException or InvalidDataException)

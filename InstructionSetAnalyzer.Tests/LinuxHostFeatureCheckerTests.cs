@@ -90,7 +90,7 @@ public class LinuxHostFeatureCheckerTests
     [InlineData(CpuidFeature.SHA512)]
     [InlineData(CpuidFeature.TDX)]
     [InlineData(CpuidFeature.UINTR)]
-    public void Reports_indeterminate_for_features_the_kernel_does_not_expose(CpuidFeature feature)
+    public void Reports_indeterminate_for_features_the_kernel_hides_when_cpuid_is_unavailable(CpuidFeature feature)
     {
         // amx_tile is present so the AMX variants get past the AMX_TILE prerequisite.
         var result = Check(feature, ["avx2", "amx_tile"]);
