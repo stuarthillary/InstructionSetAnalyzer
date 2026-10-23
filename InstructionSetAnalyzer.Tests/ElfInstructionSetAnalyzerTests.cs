@@ -150,6 +150,25 @@ public class ElfInstructionSetAnalyzerTests : IDisposable
         Assert.Contains(path, exception.Message);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Releases_the_file_even_when_parsing_fails(bool collectSymbols)
+    {
+        // ELFSharp keeps the handle it opened when it throws on a corrupt file, which locks the file on Windows.
+        // FileShare.None is enforced with advisory locks on Unix, so an exclusive open exposes a leaked handle.
+        var corrupt = _temp.Write("corrupt.so", TestElf.WithBadSectionNameIndex(DispatchFixture.Elf()));
+        var truncated = _temp.Write("truncated.so", TestElf.Build(TestElf.Avx, programHeader: true)[..100]);
+        var analyzer = new ElfInstructionSetAnalyzer(collectSymbols: collectSymbols);
+
+        foreach (var path in new[] { corrupt, truncated })
+        {
+            Assert.Throws<InvalidDataException>(() => analyzer.Analyze(path));
+
+            using var exclusive = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        }
+    }
+
     [Fact]
     public void Truncated_files_are_reported_as_invalid_data()
     {

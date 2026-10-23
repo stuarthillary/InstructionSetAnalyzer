@@ -2,14 +2,21 @@ using System.Text;
 
 namespace InstructionSetAnalyzer.Tests;
 
+/// <summary>A function symbol placed in the test ELF's .symtab. <paramref name="Offset"/> is relative to the code.</summary>
+internal sealed record TestSymbol(
+    string Name, int Offset, int Size, bool Ifunc = false, ulong? RawValue = null, ulong? RawSize = null);
+
 /// <summary>Builds minimal little-endian ELF files containing a single code region.</summary>
 internal static class TestElf
 {
+    public const ulong CodeAddress = 0x1000;
+
     public const ushort MachineI386 = 3;
     public const ushort MachineX86_64 = 62;
     public const ushort MachineAArch64 = 183;
 
     private const uint ShtProgBits = 1;
+    private const uint ShtSymTab = 2;
     private const uint ShtStrTab = 3;
     private const uint ShfAlloc = 0x2;
     private const uint ShfExecInstr = 0x4;
@@ -37,11 +44,18 @@ internal static class TestElf
         bool is64Bit = true,
         bool executable = true,
         bool sectionHeaders = true,
-        bool programHeader = false)
+        bool programHeader = false,
+        IReadOnlyList<TestSymbol>? symbols = null)
     {
-        var sectionNames = "\0.text\0.shstrtab\0"u8.ToArray();
+        var hasSymbols = symbols is not null && sectionHeaders;
+        var sectionNames = "\0.text\0.shstrtab\0.symtab\0.strtab\0"u8.ToArray();
         const int textNameOffset = 1;
         const int shstrtabNameOffset = 7;
+        const int symtabNameOffset = 17;
+        const int strtabNameOffset = 25;
+        var (symbolTable, symbolNames) = hasSymbols
+            ? BuildSymbolTable(symbols!, is64Bit)
+            : ([], []);
 
         var headerSize = is64Bit ? 64 : 52;
         var programHeaderSize = is64Bit ? 56 : 32;
@@ -49,7 +63,11 @@ internal static class TestElf
         var programHeadersOffset = programHeader ? headerSize : 0;
         var textOffset = headerSize + (programHeader ? programHeaderSize : 0);
         var strtabOffset = textOffset + code.Length;
-        var sectionHeadersOffset = sectionHeaders ? (strtabOffset + sectionNames.Length + 7) & ~7 : 0;
+        var symtabOffset = (strtabOffset + sectionNames.Length + 7) & ~7;
+        var symbolNamesOffset = symtabOffset + symbolTable.Length;
+        var sectionHeadersEnd = hasSymbols ? symbolNamesOffset + symbolNames.Length : strtabOffset + sectionNames.Length;
+        var sectionHeadersOffset = sectionHeaders ? (sectionHeadersEnd + 7) & ~7 : 0;
+        var sectionCount = hasSymbols ? 5 : 3;
 
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream, Encoding.ASCII, leaveOpen: true);
@@ -83,7 +101,7 @@ internal static class TestElf
         writer.Write((ushort)programHeaderSize);
         writer.Write((ushort)(programHeader ? 1 : 0));
         writer.Write((ushort)sectionHeaderSize);
-        writer.Write((ushort)(sectionHeaders ? 3 : 0)); // e_shnum
+        writer.Write((ushort)(sectionHeaders ? sectionCount : 0)); // e_shnum
         writer.Write((ushort)(sectionHeaders ? 2 : 0)); // e_shstrndx
 
         if (programHeader)
@@ -95,8 +113,8 @@ internal static class TestElf
             }
 
             Word((ulong)textOffset); // p_offset
-            Word(0x1000); // p_vaddr
-            Word(0x1000); // p_paddr
+            Word(CodeAddress); // p_vaddr
+            Word(CodeAddress); // p_paddr
             Word((ulong)code.Length); // p_filesz
             Word((ulong)code.Length); // p_memsz
             if (!is64Bit)
@@ -114,12 +132,25 @@ internal static class TestElf
         }
 
         writer.Write(sectionNames);
+        if (hasSymbols)
+        {
+            while (stream.Position < symtabOffset)
+            {
+                writer.Write((byte)0);
+            }
+
+            writer.Write(symbolTable);
+            writer.Write(symbolNames);
+        }
+
         while (stream.Position < sectionHeadersOffset)
         {
             writer.Write((byte)0);
         }
 
-        void SectionHeader(uint name, uint type, ulong flags, ulong address, ulong offset, ulong size)
+        void SectionHeader(
+            uint name, uint type, ulong flags, ulong address, ulong offset, ulong size,
+            uint link = 0, uint info = 0, ulong entrySize = 0)
         {
             writer.Write(name);
             writer.Write(type);
@@ -127,10 +158,10 @@ internal static class TestElf
             Word(address);
             Word(offset);
             Word(size);
-            writer.Write(0u); // sh_link
-            writer.Write(0u); // sh_info
+            writer.Write(link);
+            writer.Write(info);
             Word(1); // sh_addralign
-            Word(0); // sh_entsize
+            Word(entrySize);
         }
 
         SectionHeader(0, 0, 0, 0, 0, 0);
@@ -138,10 +169,17 @@ internal static class TestElf
             textNameOffset,
             ShtProgBits,
             executable ? ShfAlloc | ShfExecInstr : ShfAlloc,
-            0x1000,
+            CodeAddress,
             (ulong)textOffset,
             (ulong)code.Length);
         SectionHeader(shstrtabNameOffset, ShtStrTab, 0, 0, (ulong)strtabOffset, (ulong)sectionNames.Length);
+        if (hasSymbols)
+        {
+            SectionHeader(
+                symtabNameOffset, ShtSymTab, 0, 0, (ulong)symtabOffset, (ulong)symbolTable.Length,
+                link: 4, info: 1, entrySize: (ulong)(is64Bit ? 24 : 16));
+            SectionHeader(strtabNameOffset, ShtStrTab, 0, 0, (ulong)symbolNamesOffset, (ulong)symbolNames.Length);
+        }
 
         return stream.ToArray();
     }
@@ -153,5 +191,52 @@ internal static class TestElf
         var sectionHeadersOffset = (int)BitConverter.ToUInt64(corrupted, 0x28);
         BitConverter.GetBytes(0x00FFFFFFu).CopyTo(corrupted, sectionHeadersOffset + 64); // .text sh_name
         return corrupted;
+    }
+
+    private static (byte[] SymbolTable, byte[] Names) BuildSymbolTable(IReadOnlyList<TestSymbol> symbols, bool is64Bit)
+    {
+        using var table = new MemoryStream();
+        using var writer = new BinaryWriter(table);
+        var names = new MemoryStream();
+        names.WriteByte(0);
+
+        void Entry(uint nameOffset, byte info, ulong value, ulong size)
+        {
+            writer.Write(nameOffset);
+            if (is64Bit)
+            {
+                writer.Write(info);
+                writer.Write((byte)0); // st_other
+                writer.Write((ushort)1); // st_shndx: .text
+                writer.Write(value);
+                writer.Write(size);
+            }
+            else
+            {
+                writer.Write((uint)value);
+                writer.Write((uint)size);
+                writer.Write(info);
+                writer.Write((byte)0);
+                writer.Write((ushort)1);
+            }
+        }
+
+        Entry(0, 0, 0, 0); // the mandatory null symbol
+        foreach (var symbol in symbols)
+        {
+            var nameOffset = (uint)names.Length;
+            names.Write(Encoding.ASCII.GetBytes(symbol.Name));
+            names.WriteByte(0);
+            const byte global = 1;
+            const byte function = 2;
+            const byte ifunc = 10;
+            Entry(
+                nameOffset,
+                (byte)(global << 4 | (symbol.Ifunc ? ifunc : function)),
+                symbol.RawValue ?? CodeAddress + (ulong)symbol.Offset,
+                symbol.RawSize ?? (ulong)symbol.Size);
+        }
+
+        return (table.ToArray(), names.ToArray());
     }
 }
