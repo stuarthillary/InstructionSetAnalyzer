@@ -1,4 +1,4 @@
-# FindInstructionSet
+# InstructionSetAnalyzer
 
 A .NET console application that reports the x86 CPU features used by Linux ELF
 binaries. It is inspired by
@@ -17,13 +17,13 @@ extensionless Linux executables are both analyzed.
 ## Usage
 
 ```powershell
-dotnet run --project .\FindInstructionSet -- analyze <binary-file-or-directory>
+dotnet run --project .\InstructionSetAnalyzer -- analyze <binary-file-or-directory>
 ```
 
 For example, from Windows:
 
 ```powershell
-dotnet run --project .\FindInstructionSet -- analyze C:\artifacts\linux-x64\libexample.so
+dotnet run --project .\InstructionSetAnalyzer -- analyze C:\artifacts\linux-x64\libexample.so
 ```
 
 The binary is parsed and disassembled as data; it is never loaded or executed.
@@ -35,7 +35,7 @@ To analyze binaries and immediately compare the result with the current Linux
 host:
 
 ```bash
-dotnet run --project ./FindInstructionSet -- analyze /opt/my-app --check-host
+dotnet run --project ./InstructionSetAnalyzer -- analyze /opt/my-app --check-host
 ```
 
 Host checking must run on the target x86 or x86-64 Linux machine. ELF analysis
@@ -43,7 +43,7 @@ itself remains cross-platform, so analysis can be performed on Windows and its
 feature list passed to a separately deployed copy on Linux:
 
 ```bash
-dotnet run --project ./FindInstructionSet -- check-host AVX AVX2,FMA AES
+dotnet run --project ./InstructionSetAnalyzer -- check-host AVX AVX2,FMA AES
 ```
 
 Feature names are case-insensitive Iced `CpuidFeature` names. Values may be
@@ -65,3 +65,15 @@ have a reliable Linux userspace capability flag. These are reported as
 Exit code `0` means all requested features are supported, `1` indicates invalid
 input or an environment error, and `2` means at least one feature is unsupported
 or indeterminate.
+
+## Development
+
+```bash
+dotnet build
+dotnet test
+```
+
+Tests build tiny ELF files in memory, so they run on any OS. The host checker is
+exercised through a fake, because the real one reads `/proc/cpuinfo`. The
+project publishes with Native AOT (`PublishAot`); CI builds and tests on Linux and
+Windows and smoke-tests an AOT publish on Linux.

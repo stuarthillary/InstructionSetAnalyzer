@@ -120,8 +120,3 @@ public sealed class ElfInstructionSetAnalyzer
         }
     }
 }
-
-public sealed record AnalysisResult(
-    string Architecture,
-    int ExecutableSectionCount,
-    IReadOnlySet<CpuidFeature> Features);

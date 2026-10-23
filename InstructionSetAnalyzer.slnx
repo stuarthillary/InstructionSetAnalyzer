@@ -1,3 +1,4 @@
 <Solution>
+  <Project Path="InstructionSetAnalyzer.Tests/InstructionSetAnalyzer.Tests.csproj" />
   <Project Path="InstructionSetAnalyzer/InstructionSetAnalyzer.csproj" />
 </Solution>
