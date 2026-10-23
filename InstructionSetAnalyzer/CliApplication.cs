@@ -32,11 +32,19 @@ internal sealed class CliApplication
         {
             Description = "Check whether this Linux host supports every detected feature."
         };
+        var includePrivilegedOption = new Option<bool>("--include-privileged")
+        {
+            Description = "Also report features whose instructions only run in ring 0 (such as VMX or MSR). " +
+                          "By default these are hidden because user-space binaries only contain them as misdecoded data."
+        };
         var analyzeCommand = new Command("analyze", "Find CPU features used by an ELF file or directory.");
         analyzeCommand.Arguments.Add(pathArgument);
         analyzeCommand.Options.Add(checkHostOption);
-        analyzeCommand.SetAction(parseResult =>
-            Analyze(parseResult.GetValue(pathArgument)!, parseResult.GetValue(checkHostOption)));
+        analyzeCommand.Options.Add(includePrivilegedOption);
+        analyzeCommand.SetAction(parseResult => Analyze(
+            parseResult.GetValue(pathArgument)!,
+            parseResult.GetValue(checkHostOption),
+            parseResult.GetValue(includePrivilegedOption)));
 
         var featuresArgument = new Argument<string[]>("features")
         {
@@ -52,10 +60,11 @@ internal sealed class CliApplication
         return rootCommand;
     }
 
-    internal int Analyze(string inputPath, bool checkHost)
+    internal int Analyze(string inputPath, bool checkHost, bool includePrivileged = false)
     {
         var path = Path.GetFullPath(inputPath);
-        var analyzer = new ElfInstructionSetAnalyzer();
+        var analyzer = new ElfInstructionSetAnalyzer(includePrivileged);
+        var failedCount = 0;
 
         try
         {
@@ -63,8 +72,10 @@ internal sealed class CliApplication
             if (File.Exists(path))
             {
                 var result = analyzer.Analyze(path);
-                _output.WriteLine(
-                    $"Binary {path} ({result.Architecture}, {result.ExecutableSectionCount} executable sections)");
+                var regions = result.Source == CodeSource.Sections
+                    ? $"{result.ExecutableRegionCount} executable sections"
+                    : $"{result.ExecutableRegionCount} executable segments, no executable sections";
+                _output.WriteLine($"Binary {path} ({result.Architecture}, {regions})");
                 features = result.Features;
             }
             else if (Directory.Exists(path))
@@ -72,7 +83,13 @@ internal sealed class CliApplication
                 var result = AnalyzeDirectory(path, analyzer);
                 _output.WriteLine($"Directory {path}");
                 _output.WriteLine($"Analyzed ELF binaries: {result.AnalyzedCount}");
+                if (result.SkippedCount > 0)
+                {
+                    _output.WriteLine($"Skipped (unsupported architecture): {result.SkippedCount}");
+                }
+
                 features = result.Features;
+                failedCount = result.FailedCount;
 
                 if (result.AnalyzedCount == 0)
                 {
@@ -87,7 +104,15 @@ internal sealed class CliApplication
             }
 
             PrintFeatures(features);
-            return checkHost ? CheckHostFeatures(features) : 0;
+            var exitCode = checkHost ? CheckHostFeatures(features) : 0;
+            if (failedCount > 0)
+            {
+                _error.WriteLine(
+                    $"Error: {failedCount} ELF file(s) could not be analyzed, so the feature list may be incomplete.");
+                return exitCode == 0 ? 1 : exitCode;
+            }
+
+            return exitCode;
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or InvalidDataException or NotSupportedException)
@@ -101,6 +126,8 @@ internal sealed class CliApplication
     {
         var features = new HashSet<CpuidFeature>();
         var analyzedCount = 0;
+        var skippedCount = 0;
+        var failedCount = 0;
         var options = new EnumerationOptions
         {
             RecurseSubdirectories = true,
@@ -122,15 +149,22 @@ internal sealed class CliApplication
                 features.UnionWith(result.Features);
                 analyzedCount++;
             }
-            catch (Exception exception) when (
-                exception is IOException or UnauthorizedAccessException or InvalidDataException or NotSupportedException)
+            catch (NotSupportedException exception)
             {
+                // Unsupported architectures are expected in mixed directories and do not make the scan fail.
+                skippedCount++;
+                _error.WriteLine($"Warning: skipped {file}: {exception.Message}");
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                failedCount++;
                 _error.WriteLine($"Warning: could not analyze {file}: {exception.Message}");
             }
         }
 
         _output.WriteLine();
-        return new DirectoryAnalysisResult(analyzedCount, features);
+        return new DirectoryAnalysisResult(analyzedCount, skippedCount, failedCount, features);
     }
 
     private int CheckHostNames(IEnumerable<string> values)

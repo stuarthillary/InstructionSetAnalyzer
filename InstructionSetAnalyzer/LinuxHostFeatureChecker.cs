@@ -30,7 +30,7 @@ public sealed class LinuxHostFeatureChecker : IHostFeatureChecker
             results);
     }
 
-    private static HostFeatureResult CheckFeature(
+    internal static HostFeatureResult CheckFeature(
         CpuidFeature feature,
         IReadOnlySet<string> flags,
         ulong? supportedXstate,
@@ -41,18 +41,21 @@ public sealed class LinuxHostFeatureChecker : IHostFeatureChecker
             return new HostFeatureResult(feature, HostFeatureStatus.Supported, "x86 architectural feature");
         }
 
-        var aliases = LinuxCpuFlagTables.FlagAliases.TryGetValue(feature, out var configuredAliases)
-            ? configuredAliases
-            : [feature.ToString().ToLowerInvariant()];
+        if (IsAmxFeature(feature) && !flags.Contains("amx_tile"))
+        {
+            return new HostFeatureResult(
+                feature,
+                HostFeatureStatus.Unsupported,
+                "AMX_TILE is required by every AMX instruction");
+        }
 
+        var aliases = LinuxCpuFlagTables.GetCandidateFlags(feature);
         var hasRequiredFlags = feature == CpuidFeature.PKU
             ? flags.Contains("pku") && flags.Contains("ospke")
             : aliases.Any(flags.Contains);
         if (!hasRequiredFlags)
         {
-            var mappingIsKnown =
-                LinuxCpuFlagTables.FlagAliases.ContainsKey(feature) ||
-                LinuxCpuFlagTables.KernelReported.Contains(feature);
+            var mappingIsKnown = LinuxCpuFlagTables.HasKnownFlagMapping(feature);
             return new HostFeatureResult(
                 feature,
                 mappingIsKnown ? HostFeatureStatus.Unsupported : HostFeatureStatus.Indeterminate,
@@ -65,14 +68,6 @@ public sealed class LinuxHostFeatureChecker : IHostFeatureChecker
 
         if (IsAmxFeature(feature))
         {
-            if (!flags.Contains("amx_tile"))
-            {
-                return new HostFeatureResult(
-                    feature,
-                    HostFeatureStatus.Unsupported,
-                    "AMX_TILE is required by every AMX instruction");
-            }
-
             const ulong requiredAmxState = (1UL << XfeatureTileConfig) | (1UL << XfeatureTileData);
             if (supportedXstate is null)
             {
@@ -159,7 +154,7 @@ public sealed class LinuxHostFeatureChecker : IHostFeatureChecker
         {
             return ArchPrctl(operation, out var mask) == 0 ? mask : null;
         }
-        catch (EntryPointNotFoundException)
+        catch (Exception exception) when (exception is EntryPointNotFoundException or DllNotFoundException)
         {
             return null;
         }

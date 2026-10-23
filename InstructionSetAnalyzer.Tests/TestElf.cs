@@ -2,7 +2,7 @@ using System.Text;
 
 namespace InstructionSetAnalyzer.Tests;
 
-/// <summary>Builds minimal little-endian ELF files containing a single code section.</summary>
+/// <summary>Builds minimal little-endian ELF files containing a single code region.</summary>
 internal static class TestElf
 {
     public const ushort MachineI386 = 3;
@@ -13,6 +13,8 @@ internal static class TestElf
     private const uint ShtStrTab = 3;
     private const uint ShfAlloc = 0x2;
     private const uint ShfExecInstr = 0x4;
+    private const uint PtLoad = 1;
+    private const uint PfExecuteRead = 0x5;
 
     // vmovdqa ymm0, ymm1
     public static readonly byte[] Avx = [0xC5, 0xFD, 0x6F, 0xC1];
@@ -23,21 +25,31 @@ internal static class TestElf
     // movaps xmm0, xmm1
     public static readonly byte[] Sse = [0x0F, 0x28, 0xC1];
 
+    // rdmsr (privileged: only meaningful in ring 0)
+    public static readonly byte[] Rdmsr = [0x0F, 0x32];
+
+    /// <param name="executable">Whether the code section carries the executable flag.</param>
+    /// <param name="sectionHeaders">When false the file has no section header table, like an sstrip'ed binary.</param>
+    /// <param name="programHeader">When true a single executable PT_LOAD segment covers the code.</param>
     public static byte[] Build(
         byte[] code,
         ushort machine = MachineX86_64,
         bool is64Bit = true,
-        bool executable = true)
+        bool executable = true,
+        bool sectionHeaders = true,
+        bool programHeader = false)
     {
         var sectionNames = "\0.text\0.shstrtab\0"u8.ToArray();
         const int textNameOffset = 1;
         const int shstrtabNameOffset = 7;
 
         var headerSize = is64Bit ? 64 : 52;
+        var programHeaderSize = is64Bit ? 56 : 32;
         var sectionHeaderSize = is64Bit ? 64 : 40;
-        var textOffset = headerSize;
+        var programHeadersOffset = programHeader ? headerSize : 0;
+        var textOffset = headerSize + (programHeader ? programHeaderSize : 0);
         var strtabOffset = textOffset + code.Length;
-        var sectionHeadersOffset = (strtabOffset + sectionNames.Length + 7) & ~7;
+        var sectionHeadersOffset = sectionHeaders ? (strtabOffset + sectionNames.Length + 7) & ~7 : 0;
 
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream, Encoding.ASCII, leaveOpen: true);
@@ -64,17 +76,43 @@ internal static class TestElf
         writer.Write(machine);
         writer.Write(1u); // e_version
         Word(0); // e_entry
-        Word(0); // e_phoff
+        Word((ulong)programHeadersOffset);
         Word((ulong)sectionHeadersOffset);
         writer.Write(0u); // e_flags
         writer.Write((ushort)headerSize);
-        writer.Write((ushort)(is64Bit ? 56 : 32)); // e_phentsize
-        writer.Write((ushort)0); // e_phnum
+        writer.Write((ushort)programHeaderSize);
+        writer.Write((ushort)(programHeader ? 1 : 0));
         writer.Write((ushort)sectionHeaderSize);
-        writer.Write((ushort)3); // e_shnum
-        writer.Write((ushort)2); // e_shstrndx
+        writer.Write((ushort)(sectionHeaders ? 3 : 0)); // e_shnum
+        writer.Write((ushort)(sectionHeaders ? 2 : 0)); // e_shstrndx
+
+        if (programHeader)
+        {
+            writer.Write(PtLoad);
+            if (is64Bit)
+            {
+                writer.Write(PfExecuteRead);
+            }
+
+            Word((ulong)textOffset); // p_offset
+            Word(0x1000); // p_vaddr
+            Word(0x1000); // p_paddr
+            Word((ulong)code.Length); // p_filesz
+            Word((ulong)code.Length); // p_memsz
+            if (!is64Bit)
+            {
+                writer.Write(PfExecuteRead);
+            }
+
+            Word(1); // p_align
+        }
 
         writer.Write(code);
+        if (!sectionHeaders)
+        {
+            return stream.ToArray();
+        }
+
         writer.Write(sectionNames);
         while (stream.Position < sectionHeadersOffset)
         {
@@ -106,5 +144,14 @@ internal static class TestElf
         SectionHeader(shstrtabNameOffset, ShtStrTab, 0, 0, (ulong)strtabOffset, (ulong)sectionNames.Length);
 
         return stream.ToArray();
+    }
+
+    /// <summary>Points the .text section's name at a string offset far outside the string table.</summary>
+    public static byte[] WithBadSectionNameIndex(byte[] elf)
+    {
+        var corrupted = (byte[])elf.Clone();
+        var sectionHeadersOffset = (int)BitConverter.ToUInt64(corrupted, 0x28);
+        BitConverter.GetBytes(0x00FFFFFFu).CopyTo(corrupted, sectionHeadersOffset + 64); // .text sh_name
+        return corrupted;
     }
 }

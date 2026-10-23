@@ -67,12 +67,15 @@ public class FeatureParserTests
         Assert.Throws<ArgumentNullException>(() => FeatureParser.Parse(null!));
     }
 
-    // Documents current behavior; Phase 2 will reject numeric names.
-    [Fact]
-    public void Currently_accepts_numeric_names_for_defined_values()
+    [Theory]
+    [InlineData("5")]
+    [InlineData("-1")]
+    [InlineData("0x10")]
+    [InlineData("999999")]
+    public void Rejects_numeric_names(string value)
     {
-        var features = FeatureParser.Parse([((int)CpuidFeature.AVX2).ToString()]);
+        var exception = Assert.Throws<ArgumentException>(() => FeatureParser.Parse([value]));
 
-        Assert.Contains(CpuidFeature.AVX2, features);
+        Assert.Equal($"Unknown CPU feature name: {value}", exception.Message);
     }
 }

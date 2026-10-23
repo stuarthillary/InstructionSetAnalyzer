@@ -7,6 +7,8 @@ internal static class LinuxCpuFlagTables
     internal static readonly IReadOnlyDictionary<CpuidFeature, string[]> FlagAliases =
         new Dictionary<CpuidFeature, string[]>
         {
+            [CpuidFeature.AVX512_IFMA] = ["avx512ifma"],
+            [CpuidFeature.AVX512_VBMI] = ["avx512vbmi"],
             [CpuidFeature.CMPXCHG16B] = ["cx16"],
             [CpuidFeature.CET_IBT] = ["ibt"],
             [CpuidFeature.CET_SS] = ["user_shstk"],
@@ -16,6 +18,7 @@ internal static class LinuxCpuFlagTables
             [CpuidFeature.D3NOWEXT] = ["3dnowext"],
             [CpuidFeature.HLE_or_RTM] = ["hle", "rtm"],
             [CpuidFeature.LZCNT] = ["abm", "lzcnt"],
+            [CpuidFeature.MONITORX] = ["mwaitx"],
             [CpuidFeature.PREFETCHW] = ["3dnowprefetch", "prefetchw"],
             [CpuidFeature.SGX1] = ["sgx"],
             [CpuidFeature.SHA] = ["sha_ni", "sha"],
@@ -25,13 +28,14 @@ internal static class LinuxCpuFlagTables
             [CpuidFeature.X64] = ["lm"]
         };
 
+    // Features whose /proc/cpuinfo flag name is known. Anything absent from here and from FlagAliases is
+    // reported as Indeterminate: the kernel either hides the flag (AMX_FP16, AVX_IFMA, SHA512, ...),
+    // names it differently (TDX is tdx_guest) or has no userspace flag at all (UINTR, RDPMC).
     internal static readonly HashSet<CpuidFeature> KernelReported =
     [
         CpuidFeature.ADX,
         CpuidFeature.AES,
         CpuidFeature.AMX_BF16,
-        CpuidFeature.AMX_COMPLEX,
-        CpuidFeature.AMX_FP16,
         CpuidFeature.AMX_INT8,
         CpuidFeature.AMX_TILE,
         CpuidFeature.AVX,
@@ -54,11 +58,7 @@ internal static class LinuxCpuFlagTables
         CpuidFeature.AVX512F,
         CpuidFeature.AVX512PF,
         CpuidFeature.AVX512VL,
-        CpuidFeature.AVX_IFMA,
-        CpuidFeature.AVX_NE_CONVERT,
         CpuidFeature.AVX_VNNI,
-        CpuidFeature.AVX_VNNI_INT8,
-        CpuidFeature.AVX_VNNI_INT16,
         CpuidFeature.BMI1,
         CpuidFeature.BMI2,
         CpuidFeature.CLDEMOTE,
@@ -87,9 +87,7 @@ internal static class LinuxCpuFlagTables
         CpuidFeature.PCLMULQDQ,
         CpuidFeature.PKU,
         CpuidFeature.POPCNT,
-        CpuidFeature.PREFETCHWT1,
         CpuidFeature.RDPID,
-        CpuidFeature.RDPMC,
         CpuidFeature.RDPRU,
         CpuidFeature.RDRAND,
         CpuidFeature.RDSEED,
@@ -100,7 +98,6 @@ internal static class LinuxCpuFlagTables
         CpuidFeature.SEV_ES,
         CpuidFeature.SEV_SNP,
         CpuidFeature.SGX1,
-        CpuidFeature.SHA512,
         CpuidFeature.SMAP,
         CpuidFeature.SMX,
         CpuidFeature.SSE,
@@ -111,10 +108,8 @@ internal static class LinuxCpuFlagTables
         CpuidFeature.SSSE3,
         CpuidFeature.SVM,
         CpuidFeature.TBM,
-        CpuidFeature.TDX,
         CpuidFeature.TSC,
         CpuidFeature.TSXLDTRK,
-        CpuidFeature.UINTR,
         CpuidFeature.VAES,
         CpuidFeature.VMX,
         CpuidFeature.VPCLMULQDQ,
@@ -141,4 +136,13 @@ internal static class LinuxCpuFlagTables
         CpuidFeature.MULTIBYTENOP,
         CpuidFeature.PAUSE
     ];
+
+    /// <summary>The /proc/cpuinfo flag names that indicate the feature; any one of them is enough.</summary>
+    internal static IReadOnlyList<string> GetCandidateFlags(CpuidFeature feature) =>
+        FlagAliases.TryGetValue(feature, out var aliases)
+            ? aliases
+            : [feature.ToString().ToLowerInvariant()];
+
+    internal static bool HasKnownFlagMapping(CpuidFeature feature) =>
+        FlagAliases.ContainsKey(feature) || KernelReported.Contains(feature);
 }

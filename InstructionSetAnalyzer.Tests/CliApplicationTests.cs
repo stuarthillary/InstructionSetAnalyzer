@@ -70,7 +70,7 @@ public sealed class CliApplicationTests : IDisposable
     }
 
     [Fact]
-    public void Analyze_warns_about_unsupported_elf_files_in_a_directory_and_continues()
+    public void Analyze_skips_unsupported_architectures_in_a_directory_without_failing()
     {
         _temp.Write("good.so", TestElf.Build(TestElf.Avx));
         var arm = _temp.Write("arm.so", TestElf.Build(TestElf.Sse, TestElf.MachineAArch64));
@@ -79,7 +79,62 @@ public sealed class CliApplicationTests : IDisposable
 
         Assert.Equal(0, exitCode);
         Assert.Contains("Analyzed ELF binaries: 1", _output.ToString());
-        Assert.Contains($"Warning: could not analyze {arm}", _error.ToString());
+        Assert.Contains("Skipped (unsupported architecture): 1", _output.ToString());
+        Assert.Contains($"Warning: skipped {arm}", _error.ToString());
+    }
+
+    [Fact]
+    public void Analyze_keeps_going_past_a_corrupt_elf_but_exits_with_an_error()
+    {
+        _temp.Write("good.so", TestElf.Build(TestElf.Avx2));
+        var corrupt = _temp.Write("bad.so", TestElf.WithBadSectionNameIndex(TestElf.Build(TestElf.Avx)));
+
+        var exitCode = Run("analyze", _temp.Path);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Analyzed ELF binaries: 1", _output.ToString());
+        Assert.Contains("AVX2", PrintedFeatures());
+        Assert.Contains($"Warning: could not analyze {corrupt}", _error.ToString());
+        Assert.Contains("1 ELF file(s) could not be analyzed", _error.ToString());
+    }
+
+    [Fact]
+    public void Analyze_keeps_an_incompatible_host_exit_code_when_some_files_failed()
+    {
+        _checker.Status = HostFeatureStatus.Unsupported;
+        _temp.Write("good.so", TestElf.Build(TestElf.Avx2));
+        _temp.Write("bad.so", TestElf.WithBadSectionNameIndex(TestElf.Build(TestElf.Avx)));
+
+        Assert.Equal(2, Run("analyze", _temp.Path, "--check-host"));
+    }
+
+    [Fact]
+    public void Analyze_describes_files_found_through_program_headers()
+    {
+        var path = _temp.Write("stripped.so", TestElf.Build(
+            TestElf.Avx2, sectionHeaders: false, programHeader: true));
+
+        var exitCode = Run("analyze", path);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("1 executable segments, no executable sections", _output.ToString());
+        Assert.Contains("AVX2", PrintedFeatures());
+    }
+
+    [Fact]
+    public void Analyze_hides_privileged_features_unless_asked()
+    {
+        var path = _temp.Write("kernelish.so", TestElf.Build([.. TestElf.Rdmsr, .. TestElf.Avx]));
+
+        Run("analyze", path);
+        var defaultFeatures = PrintedFeatures();
+        _output.GetStringBuilder().Clear();
+        Run("analyze", path, "--include-privileged");
+        var allFeatures = PrintedFeatures();
+
+        Assert.DoesNotContain("MSR", defaultFeatures);
+        Assert.Contains("MSR", allFeatures);
+        Assert.Contains("AVX", allFeatures);
     }
 
     [Fact]
