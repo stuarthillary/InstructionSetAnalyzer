@@ -416,3 +416,7 @@ and tests on Linux and Windows and smoke-tests an AOT publish on Linux.
   list, and the original
   [instruction-set-analyzer](https://github.com/IrreducibleOSS/instruction-set-analyzer)
   this tool is inspired by.
+
+## License
+
+Released under the [MIT License](LICENSE.txt).

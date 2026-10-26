@@ -6,6 +6,12 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AnalysisLevel>latest</AnalysisLevel>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <Authors>Stuart Hillary</Authors>
+    <Copyright>Copyright (c) 2026 Stuart Hillary</Copyright>
+    <Description>Reports the x86 CPU features used by Linux ELF binaries.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/stuarthillary/InstructionSetAnalyzer</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
   </PropertyGroup>
 
 </Project>
